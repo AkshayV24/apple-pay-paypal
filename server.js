@@ -208,6 +208,40 @@ app.post('/api/orders/:orderID/capture', async (req, res) => {
 });
 
 /**
+ * POST /api/orders/:orderID/capture-simple
+ * Simple capture for PayPal Apple Pay SDK flow
+ */
+app.post('/api/orders/:orderID/capture-simple', async (req, res) => {
+    try {
+        const { orderID } = req.params;
+
+        const accessToken = await getPayPalAccessToken();
+
+        const response = await fetch(`${PAYPAL_API_BASE}/v2/checkout/orders/${orderID}/capture`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const captureData = await response.json();
+        console.log('Simple capture response:', JSON.stringify(captureData, null, 2));
+
+        const captureStatus = captureData.purchase_units?.[0]?.payments?.captures?.[0]?.status || captureData.status;
+
+        res.json({
+            success: captureStatus === 'COMPLETED',
+            orderID: captureData.id,
+            status: captureStatus
+        });
+    } catch (error) {
+        console.error('Error capturing order:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
  * GET /
  * Serves the main index.html page
  */
