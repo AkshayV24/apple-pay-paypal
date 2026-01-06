@@ -264,26 +264,14 @@
 
         /**
          * Handle Apple Pay button click
+         * IMPORTANT: ApplePaySession must be created synchronously from user gesture
          */
-        async function onApplePayButtonClicked() {
+        function onApplePayButtonClicked() {
             updateStatus('<span class="loading"></span>Starting Apple Pay...', 'info');
 
             try {
-                // Create PayPal order first
-                const orderResponse = await fetch('/api/orders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-
-                if (!orderResponse.ok) {
-                    throw new Error('Failed to create order');
-                }
-
-                const orderData = await orderResponse.json();
-                const orderId = orderData.id;
-                console.log('Order created:', orderId);
-
                 // Create Apple Pay payment request using config from PayPal
+                // This must happen SYNCHRONOUSLY in the click handler
                 const paymentRequest = {
                     countryCode: applePayConfig.countryCode || 'US',
                     currencyCode: applePayConfig.currencyCode || 'USD',
@@ -298,8 +286,11 @@
                     }
                 };
 
-                // Create new ApplePaySession (must be from user gesture)
+                // Create new ApplePaySession SYNCHRONOUSLY (must be from user gesture)
                 const applePaySession = new ApplePaySession(3, paymentRequest);
+
+                // Variable to store order ID
+                let orderId = null;
 
                 // Handle merchant validation
                 applePaySession.onvalidatemerchant = async (event) => {
@@ -328,6 +319,20 @@
                     updateStatus('<span class="loading"></span>Processing payment...', 'info');
 
                     try {
+                        // Create PayPal order NOW (after authorization)
+                        const orderResponse = await fetch('/api/orders', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+
+                        if (!orderResponse.ok) {
+                            throw new Error('Failed to create order');
+                        }
+
+                        const orderData = await orderResponse.json();
+                        orderId = orderData.id;
+                        console.log('Order created:', orderId);
+
                         // Use PayPal SDK's confirmOrder method
                         const confirmResult = await applepay.confirmOrder({
                             orderId: orderId,
