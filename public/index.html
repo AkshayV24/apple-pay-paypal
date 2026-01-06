@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Apple Pay + PayPal Demo</title>
 
+    <!-- Apple Pay JS SDK for button rendering -->
+    <script src="https://applepay.cdn-apple.com/jsapi/v1/apple-pay-sdk.js"></script>
+
     <style>
         * {
             box-sizing: border-box;
@@ -75,8 +78,20 @@
             margin-top: 20px;
         }
 
-        #apple-pay-container > div {
+        #apple-pay-btn {
+            display: none;
+            -webkit-appearance: -apple-pay-button;
+            -apple-pay-button-type: buy;
+            -apple-pay-button-style: black;
             width: 100%;
+            height: 50px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #apple-pay-btn:hover {
+            opacity: 0.9;
         }
 
         .status-message {
@@ -156,7 +171,9 @@
             <p class="product-description">This is a test product for Apple Pay integration with PayPal.</p>
             <div class="product-price">$10.00</div>
 
-            <div id="apple-pay-container"></div>
+            <div id="apple-pay-container">
+                <button id="apple-pay-btn"></button>
+            </div>
 
             <div id="status-message" class="status-message"></div>
 
@@ -189,6 +206,21 @@
          */
         async function initApplePay() {
             const supportInfo = document.getElementById('applepay-support');
+            const applePayBtn = document.getElementById('apple-pay-btn');
+
+            // Check if ApplePaySession is available (Safari/iOS only)
+            if (!window.ApplePaySession) {
+                supportInfo.textContent = 'Apple Pay: Not available (not Safari/iOS)';
+                updateStatus('Apple Pay is not available. Please use Safari on Mac or an iOS device.', 'warning');
+                return;
+            }
+
+            // Check if device can make payments
+            if (!ApplePaySession.canMakePayments()) {
+                supportInfo.textContent = 'Apple Pay: No cards configured';
+                updateStatus('Apple Pay is available but no cards are set up. Please add a card to Wallet.', 'warning');
+                return;
+            }
 
             // Check if PayPal SDK loaded
             if (!window.paypal || !window.paypal.Applepay) {
@@ -201,29 +233,20 @@
                 const applepay = paypal.Applepay();
 
                 // Check eligibility
-                const { isEligible, countryCode, currencyCode, merchantCapabilities, supportedNetworks } = await applepay.config();
+                const config = await applepay.config();
+                console.log('Apple Pay config:', config);
 
-                console.log('Apple Pay config:', { isEligible, countryCode, currencyCode, merchantCapabilities, supportedNetworks });
-
-                if (!isEligible) {
-                    supportInfo.textContent = 'Apple Pay: Not eligible';
-                    updateStatus('Apple Pay is not available. Please use Safari on a Mac with Touch ID or an iOS device with Apple Pay set up.', 'warning');
+                if (!config.isEligible) {
+                    supportInfo.textContent = 'Apple Pay: Not eligible via PayPal';
+                    updateStatus('Apple Pay is not available for this merchant.', 'warning');
                     return;
                 }
 
                 supportInfo.textContent = 'Apple Pay: Available';
-                updateStatus('Apple Pay is ready. Click the button below to pay.', 'info');
+                updateStatus('Apple Pay is ready. Click the button to pay.', 'info');
 
-                // Create Apple Pay button
-                const container = document.getElementById('apple-pay-container');
-                container.innerHTML = '<apple-pay-button id="apple-pay-btn" buttonstyle="black" type="buy" locale="en-US"></apple-pay-button>';
-
-                // Style the button
-                const applePayBtn = document.getElementById('apple-pay-btn');
-                applePayBtn.style.width = '100%';
-                applePayBtn.style.height = '50px';
-                applePayBtn.style.borderRadius = '5px';
-                applePayBtn.style.cursor = 'pointer';
+                // Show the Apple Pay button
+                applePayBtn.style.display = 'block';
 
                 // Add click handler
                 applePayBtn.addEventListener('click', async () => {
@@ -245,10 +268,10 @@
 
                         // Create Apple Pay payment request
                         const paymentRequest = {
-                            countryCode: countryCode,
-                            currencyCode: currencyCode,
-                            merchantCapabilities: merchantCapabilities,
-                            supportedNetworks: supportedNetworks,
+                            countryCode: config.countryCode || 'US',
+                            currencyCode: config.currencyCode || 'USD',
+                            merchantCapabilities: config.merchantCapabilities || ['supports3DS'],
+                            supportedNetworks: config.supportedNetworks || ['visa', 'masterCard', 'amex', 'discover'],
                             requiredBillingContactFields: ['postalAddress'],
                             requiredShippingContactFields: ['name', 'email'],
                             total: {
@@ -261,53 +284,58 @@
                         updateStatus('<span class="loading"></span>Validating merchant...', 'info');
 
                         // Start Apple Pay session via PayPal
-                        const { applePaySession } = await applepay.createOrder({
+                        const result = await applepay.createOrder({
                             paymentRequest,
                             orderId: orderData.id
                         });
 
-                        updateStatus('<span class="loading"></span>Processing payment...', 'info');
+                        console.log('createOrder result:', result);
 
-                        // Handle payment result
-                        applePaySession.onpaymentauthorized = async (event) => {
-                            try {
-                                // Confirm the order with PayPal
-                                const confirmResult = await applepay.confirmOrder({
-                                    orderId: orderData.id,
-                                    token: event.payment.token,
-                                    billingContact: event.payment.billingContact,
-                                    shippingContact: event.payment.shippingContact
-                                });
+                        if (result.applePaySession) {
+                            const session = result.applePaySession;
 
-                                console.log('Confirm result:', confirmResult);
+                            session.onpaymentauthorized = async (event) => {
+                                updateStatus('<span class="loading"></span>Processing payment...', 'info');
 
-                                // Capture the order
-                                const captureResponse = await fetch(`/api/orders/${orderData.id}/capture-simple`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' }
-                                });
+                                try {
+                                    // Confirm the order with PayPal
+                                    const confirmResult = await applepay.confirmOrder({
+                                        orderId: orderData.id,
+                                        token: event.payment.token,
+                                        billingContact: event.payment.billingContact,
+                                        shippingContact: event.payment.shippingContact
+                                    });
 
-                                const captureData = await captureResponse.json();
-                                console.log('Capture result:', captureData);
+                                    console.log('Confirm result:', confirmResult);
 
-                                if (captureData.success || captureData.status === 'COMPLETED') {
-                                    applePaySession.completePayment(ApplePaySession.STATUS_SUCCESS);
-                                    updateStatus(`Payment successful! Order ID: ${orderData.id}`, 'success');
-                                } else {
-                                    applePaySession.completePayment(ApplePaySession.STATUS_FAILURE);
-                                    updateStatus('Payment failed: ' + (captureData.message || captureData.status), 'error');
+                                    // Capture the order
+                                    const captureResponse = await fetch(`/api/orders/${orderData.id}/capture-simple`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' }
+                                    });
+
+                                    const captureData = await captureResponse.json();
+                                    console.log('Capture result:', captureData);
+
+                                    if (captureData.success || captureData.status === 'COMPLETED') {
+                                        session.completePayment(ApplePaySession.STATUS_SUCCESS);
+                                        updateStatus(`Payment successful! Order ID: ${orderData.id}`, 'success');
+                                    } else {
+                                        session.completePayment(ApplePaySession.STATUS_FAILURE);
+                                        updateStatus('Payment failed: ' + (captureData.message || captureData.status), 'error');
+                                    }
+                                } catch (error) {
+                                    console.error('Payment authorization error:', error);
+                                    session.completePayment(ApplePaySession.STATUS_FAILURE);
+                                    updateStatus('Payment failed: ' + error.message, 'error');
                                 }
-                            } catch (error) {
-                                console.error('Payment authorization error:', error);
-                                applePaySession.completePayment(ApplePaySession.STATUS_FAILURE);
-                                updateStatus('Payment failed: ' + error.message, 'error');
-                            }
-                        };
+                            };
 
-                        applePaySession.oncancel = () => {
-                            console.log('Apple Pay cancelled');
-                            updateStatus('Payment cancelled.', 'warning');
-                        };
+                            session.oncancel = () => {
+                                console.log('Apple Pay cancelled');
+                                updateStatus('Payment cancelled.', 'warning');
+                            };
+                        }
 
                     } catch (error) {
                         console.error('Apple Pay error:', error);
