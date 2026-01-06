@@ -92,7 +92,21 @@ app.post('/api/apple-pay/validate-merchant', async (req, res) => {
             return res.status(400).json({ error: 'validationUrl is required' });
         }
 
+        console.log('Validating merchant with URL:', validationUrl);
+
         const accessToken = await getPayPalAccessToken();
+        console.log('Got access token');
+
+        // Get the domain from request headers
+        const domain = req.get('host') || 'apple-pay-paypal.onrender.com';
+        console.log('Domain:', domain);
+
+        const requestBody = {
+            validationUrl: validationUrl,
+            displayName: 'Test Store',
+            domainName: domain
+        };
+        console.log('Request body:', JSON.stringify(requestBody));
 
         const response = await fetch(`${PAYPAL_API_BASE}/v1/apple-pay/validate-merchant-session`, {
             method: 'POST',
@@ -100,18 +114,18 @@ app.post('/api/apple-pay/validate-merchant', async (req, res) => {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                validationUrl: validationUrl,
-                displayName: 'Test Store'
-            })
+            body: JSON.stringify(requestBody)
         });
 
+        const responseText = await response.text();
+        console.log('PayPal response status:', response.status);
+        console.log('PayPal response:', responseText);
+
         if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Failed to validate merchant: ${error}`);
+            throw new Error(`Failed to validate merchant: ${responseText}`);
         }
 
-        const merchantSession = await response.json();
+        const merchantSession = JSON.parse(responseText);
         console.log('Merchant validated successfully');
         res.json(merchantSession);
     } catch (error) {
